@@ -1,6 +1,6 @@
 // UNTAPPED service worker — offline shell cache.
-var CACHE = 'untapped-v1';
-var FILES = ['.', 'index.html', 'styles.css', 'logic.js', 'ideas.js', 'app.js', 'manifest.webmanifest', 'icon.svg'];
+var CACHE = 'untapped-v2';
+var FILES = ['.', 'index.html', 'styles.css', 'logic.js', 'ideas.js', 'app.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'];
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(FILES); }).then(function () { return self.skipWaiting(); }));
 });
