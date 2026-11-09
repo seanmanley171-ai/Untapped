@@ -1,4 +1,5 @@
-// UNTAPPED store build — all data stays on this device (localStorage). No account, no server.
+// UNTAPPED store build — account required. Data saves on this device
+// (localStorage) AND to the signed-in user's account (Supabase user_data).
 (function () {
   'use strict';
   var KEY = 'untapped-store-v1';
@@ -6,18 +7,191 @@
   var ABIL_CATS = ['Fix & repair', 'Creative', 'Tech', 'Cooking', 'Teaching', 'Driving & hauling', 'Cleaning', 'Building', 'Care & people', 'Other'];
   var LEVELS = ['Just starting', 'Learning', 'Okay', 'Good', 'Great'];
 
+  // ---------- auth / account state ----------
+  var sb = null;
+  try {
+    if (window.supabase && window.UNTAPPED_CONFIG &&
+        window.UNTAPPED_CONFIG.SUPABASE_ANON_KEY &&
+        window.UNTAPPED_CONFIG.SUPABASE_ANON_KEY !== 'PASTE_ANON_KEY_HERE') {
+      sb = window.supabase.createClient(window.UNTAPPED_CONFIG.SUPABASE_URL, window.UNTAPPED_CONFIG.SUPABASE_ANON_KEY);
+    }
+  } catch (e) { sb = null; }
+  var currentUser = null, currentProfile = null;
+  var gate = 'loading'; // loading | auth | subscribe | app
+  var authMode = 'signin'; // signin | signup
+  var authMsg = '', authError = '', subMsg = '';
+  var authBusy = false;
+  var cloudReady = false, cloudTimer = null;
+  var hadLocalSave = false;
+  var loadingUserId = null;
+
   var state = load();
   var view = 'home';
   var editingRes = null, editingAb = null, showDismissed = false;
 
+  function defaultState() {
+    return { resources: [], abilities: [], setup: { goal: '', hoursPerWeek: '', budget: '' }, favorites: [], dismissed: [], projects: [] };
+  }
+  function normalizeState(s) {
+    var d = defaultState();
+    if (!s || typeof s !== 'object') return d;
+    if (Array.isArray(s.resources)) d.resources = s.resources;
+    if (Array.isArray(s.abilities)) d.abilities = s.abilities;
+    if (Array.isArray(s.favorites)) d.favorites = s.favorites;
+    if (Array.isArray(s.dismissed)) d.dismissed = s.dismissed;
+    if (Array.isArray(s.projects)) d.projects = s.projects;
+    if (s.setup && typeof s.setup === 'object') d.setup = { goal: s.setup.goal || '', hoursPerWeek: s.setup.hoursPerWeek || '', budget: s.setup.budget || '' };
+    return d;
+  }
   function load() {
     try {
       var raw = localStorage.getItem(KEY);
-      if (raw) return JSON.parse(raw);
+      if (raw) { hadLocalSave = true; return normalizeState(JSON.parse(raw)); }
     } catch (e) {}
-    return { resources: [], abilities: [], setup: { goal: '', hoursPerWeek: '', budget: '' }, favorites: [], dismissed: [], projects: [] };
+    return defaultState();
   }
-  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+  function saveLocal() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+  function save() { saveLocal(); scheduleCloudSave(); }
+
+  // ---------- cloud sync (Supabase user_data) ----------
+  function scheduleCloudSave() {
+    if (!sb || !currentUser || !cloudReady) return;
+    if (cloudTimer) clearTimeout(cloudTimer);
+    cloudTimer = setTimeout(upsertCloud, 1000);
+  }
+  function upsertCloud() {
+    if (!sb || !currentUser) return Promise.resolve();
+    var uidNow = currentUser.id;
+    var blob = JSON.parse(JSON.stringify(state));
+    return sb.from('user_data')
+      .upsert({ user_id: uidNow, data: blob, updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
+      .then(function (res) { if (res.error) console.warn('UNTAPPED cloud save failed:', res.error.message); })
+      .catch(function (e) { console.warn('UNTAPPED cloud save failed:', e); });
+  }
+  function loadCloudData(userId) {
+    return sb.from('user_data').select('data').eq('user_id', userId).maybeSingle()
+      .then(function (res) {
+        if (res.error) { console.warn('UNTAPPED cloud load failed:', res.error.message); cloudReady = true; return; }
+        if (res.data && res.data.data && typeof res.data.data === 'object' && Object.keys(res.data.data).length) {
+          // Account copy wins over the local copy.
+          state = normalizeState(res.data.data);
+          saveLocal();
+          cloudReady = true;
+        } else {
+          cloudReady = true;
+          // No account copy yet: upload the local save once, if there is one
+          // (this preserves the owner's existing data, e.g. "Tool equipment").
+          if (hadLocalSave) return upsertCloud();
+        }
+      })
+      .catch(function (e) { console.warn('UNTAPPED cloud load failed:', e); cloudReady = true; });
+  }
+  function loadProfile(userId) {
+    return sb.from('profiles').select('id, email, is_admin, sub_status, sub_current_period_end').eq('id', userId).maybeSingle()
+      .then(function (res) {
+        if (res.error) { console.warn('UNTAPPED profile load failed:', res.error.message); return null; }
+        return res.data || null;
+      })
+      .catch(function (e) { console.warn('UNTAPPED profile load failed:', e); return null; });
+  }
+  function hasAccess(p) {
+    if (!p) return false;
+    if (p.is_admin) return true;
+    if (p.sub_status === 'active' && p.sub_current_period_end) {
+      return new Date(p.sub_current_period_end).getTime() > Date.now();
+    }
+    return false;
+  }
+  function afterSignIn(userObj) {
+    if (!userObj) { gate = 'auth'; render(); return Promise.resolve(); }
+    if (loadingUserId === userObj.id && gate !== 'auth') return Promise.resolve();
+    loadingUserId = userObj.id;
+    currentUser = userObj;
+    gate = 'loading'; render();
+    return loadProfile(userObj.id).then(function (profile) {
+      currentProfile = profile;
+      return loadCloudData(userObj.id);
+    }).then(function () {
+      loadingUserId = null;
+      gate = hasAccess(currentProfile) ? 'app' : 'subscribe';
+      render();
+    }).catch(function (e) {
+      console.warn('UNTAPPED sign-in setup failed:', e);
+      loadingUserId = null;
+      gate = 'subscribe';
+      render();
+    });
+  }
+  function doSignOut() {
+    if (cloudTimer) { clearTimeout(cloudTimer); cloudTimer = null; }
+    currentUser = null; currentProfile = null; cloudReady = false; loadingUserId = null;
+    authMsg = ''; authError = ''; subMsg = '';
+    gate = 'auth';
+    if (sb) sb.auth.signOut().catch(function () {});
+    render();
+  }
+  function doForgot(email) {
+    if (!sb) { authError = 'Sign-in is not switched on in this build yet. Please try again later.'; render(); return; }
+    if (!email) { authError = 'Type your email above first, then tap Forgot password.'; render(); return; }
+    authError = ''; authMsg = '';
+    sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + window.location.pathname })
+      .then(function (res) {
+        if (res.error) authError = res.error.message;
+        else authMsg = 'Password reset email sent. Check your inbox and follow the link.';
+        render();
+      })
+      .catch(function (e) { authError = (e && e.message) || 'Could not send the reset email.'; render(); });
+  }
+  function doAuthSubmit(fd) {
+    if (!sb) { authError = 'Sign-in is not switched on in this build yet. Please try again later.'; render(); return; }
+    if (authBusy) return;
+    var email = String(fd.get('email') || '').trim();
+    var password = String(fd.get('password') || '');
+    if (!email || !password) { authError = 'Enter your email and password.'; render(); return; }
+    authBusy = true; authError = ''; authMsg = ''; render();
+    var done = function () { authBusy = false; };
+    if (authMode === 'signup') {
+      sb.auth.signUp({ email: email, password: password })
+        .then(function (res) {
+          done();
+          if (res.error) { authError = res.error.message; render(); return; }
+          if (res.data && res.data.session && res.data.user) { afterSignIn(res.data.user); return; }
+          authMsg = 'Account created. Check your email to confirm it, then sign in.';
+          authMode = 'signin';
+          render();
+        })
+        .catch(function (e) { done(); authError = (e && e.message) || 'Could not create the account.'; render(); });
+    } else {
+      sb.auth.signInWithPassword({ email: email, password: password })
+        .then(function (res) {
+          done();
+          if (res.error) { authError = res.error.message; render(); return; }
+          if (res.data && res.data.user) afterSignIn(res.data.user);
+          else { authError = 'Sign-in did not finish. Please try again.'; render(); }
+        })
+        .catch(function (e) { done(); authError = (e && e.message) || 'Could not sign in.'; render(); });
+    }
+  }
+  function initAuth() {
+    gate = 'loading'; render();
+    if (!sb) { gate = 'auth'; render(); return; }
+    sb.auth.onAuthStateChange(function (event, session) {
+      if (event === 'SIGNED_OUT' || !session) {
+        if (gate !== 'auth' && !currentUser) { gate = 'auth'; render(); }
+        return;
+      }
+      if (session.user && (!currentUser || currentUser.id !== session.user.id) && event !== 'PASSWORD_RECOVERY') {
+        afterSignIn(session.user);
+      }
+    });
+    sb.auth.getSession()
+      .then(function (res) {
+        var session = res.data && res.data.session;
+        if (session && session.user) afterSignIn(session.user);
+        else { gate = 'auth'; render(); }
+      })
+      .catch(function () { gate = 'auth'; render(); });
+  }
   function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function user() { return { resources: state.resources, abilities: state.abilities, setup: state.setup }; }
@@ -48,6 +222,46 @@
       '<p class="sub">' + esc(sub) + '</p></div>';
   }
 
+  // ---------- gate screens (loading / auth / subscribe) ----------
+  function accountHTML() {
+    if (!currentUser) return '';
+    return '<div class="panel account"><h2>Account</h2>' +
+      '<p class="dim">Signed in as ' + esc(currentUser.email || '') + '</p>' +
+      '<div class="row"><button data-act="signOut">Sign out</button></div></div>';
+  }
+
+  function authHTML() {
+    var signup = authMode === 'signup';
+    return header(signup ? 'Create your account' : 'Sign in to continue') +
+      '<form id="authForm" class="form"><h2>' + (signup ? 'Create account' : 'Sign in') + '</h2>' +
+      '<label>Email <input id="authEmail" name="email" type="email" autocomplete="email" required placeholder="you@example.com"></label>' +
+      '<label>Password <input name="password" type="password" autocomplete="' + (signup ? 'new-password' : 'current-password') + '" required placeholder="Your password"></label>' +
+      (authError ? '<div class="err">' + esc(authError) + '</div>' : '') +
+      (authMsg ? '<div class="msg">' + esc(authMsg) + '</div>' : '') +
+      (!sb ? '<div class="err">Sign-in is not switched on in this build yet. Please try again later.</div>' : '') +
+      '<button class="primary big" type="submit"' + (authBusy ? ' disabled' : '') + '>' + (authBusy ? 'Please wait…' : (signup ? 'Create account' : 'Sign in')) + '</button>' +
+      '<div class="row"><button type="button" data-act="authToggle">' + (signup ? 'Already have an account? Sign in' : 'New here? Create account') + '</button>' +
+      '<button type="button" data-act="forgot">Forgot password</button></div></form>' +
+      '<div class="panel"><p class="dim">An account is required. Your things, skills and projects save to your account, so they are there when you sign in on another device.</p></div>';
+  }
+
+  function subscribeHTML() {
+    var email = currentUser ? (currentUser.email || '') : '';
+    return header('Subscription required') +
+      '<div class="panel glow"><h2>UNTAPPED — $4.99/month</h2>' +
+      '<p>One monthly subscription opens the whole app: your resources, skills, matching ideas, projects and growth — saved to your account.</p>' +
+      '<p class="dim">Signed in as ' + esc(email) + '</p>' +
+      (subMsg ? '<div class="msg">' + esc(subMsg) + '</div>' : '') +
+      '<button class="primary big" data-act="subscribePlaceholder">Subscribe — $4.99/month</button>' +
+      '<div class="row"><button data-act="restorePlaceholder">Restore purchase</button>' +
+      '<button data-act="signOut">Sign out</button></div></div>' +
+      '<div class="panel"><p class="dim">Payments are handled by Google Play. You can cancel anytime in Google Play.</p></div>';
+  }
+
+  function loadingHTML() {
+    return header('One moment') + '<div class="panel"><p>Loading your account…</p></div>';
+  }
+
   function homeHTML() {
     var ms = matches();
     var step = state.resources.length === 0 ? 1 : (state.abilities.length === 0 ? 2 : 3);
@@ -64,7 +278,8 @@
       card('projects', 'Projects', 'What you\u2019re making happen', state.projects.length + ' started') +
       card('growth', 'Growth', 'How far you\u2019ve come', 'Your real numbers') +
       '</div>' +
-      (latest ? '<div class="panel"><h2>Latest things you added</h2><ul class="plain">' + latest + '</ul></div>' : '<div class="panel"><h2>Start here</h2><p>A bike, a drill, free Sunday hours — if it can be used, it counts.</p></div>');
+      (latest ? '<div class="panel"><h2>Latest things you added</h2><ul class="plain">' + latest + '</ul></div>' : '<div class="panel"><h2>Start here</h2><p>A bike, a drill, free Sunday hours — if it can be used, it counts.</p></div>') +
+      accountHTML();
     function card(v, t, d, c) { return '<button class="bigcard" data-nav="' + v + '"><span class="ct">' + t + '</span><span class="cd">' + d + '</span><span class="cc">' + c + '</span></button>'; }
   }
 
@@ -172,20 +387,34 @@
       '<div class="panel"><p>Only your real numbers. No streaks. No pressure. Miss a week, nothing breaks.</p></div>';
   }
 
-  function render() {
+  function renderApp() {
+    nav.style.display = '';
     renderNav();
     app.innerHTML = view === 'home' ? homeHTML() : view === 'resources' ? resourcesHTML() : view === 'abilities' ? abilitiesHTML() :
       view === 'discover' ? discoverHTML() : view === 'projects' ? projectsHTML() : growthHTML();
     window.scrollTo(0, 0);
   }
 
+  function render() {
+    if (gate === 'app') { renderApp(); return; }
+    nav.innerHTML = '';
+    nav.style.display = 'none';
+    app.innerHTML = gate === 'auth' ? authHTML() : gate === 'subscribe' ? subscribeHTML() : loadingHTML();
+    window.scrollTo(0, 0);
+  }
+
   // ---------- events ----------
   document.addEventListener('click', function (e) {
     var navBtn = e.target.closest('[data-nav]');
-    if (navBtn) { view = navBtn.getAttribute('data-nav'); render(); return; }
+    if (navBtn) { if (gate !== 'app') return; view = navBtn.getAttribute('data-nav'); render(); return; }
     var btn = e.target.closest('[data-act]');
     if (!btn) return;
     var act = btn.getAttribute('data-act'), id = btn.getAttribute('data-id');
+    if (act === 'signOut') { doSignOut(); return; }
+    if (act === 'authToggle') { authMode = authMode === 'signin' ? 'signup' : 'signin'; authError = ''; authMsg = ''; render(); return; }
+    if (act === 'forgot') { var em = document.getElementById('authEmail'); doForgot(em ? em.value.trim() : ''); return; }
+    if (act === 'subscribePlaceholder') { subMsg = 'Checkout opens when billing is switched on. Nothing was charged.'; render(); return; }
+    if (act === 'restorePlaceholder') { subMsg = 'Restore opens when billing is switched on. Nothing was charged.'; render(); return; }
     if (act === 'addRes') { window.__showResForm = true; editingRes = null; render(); }
     if (act === 'cancelRes') { window.__showResForm = false; editingRes = null; render(); }
     if (act === 'editRes') { window.__showResForm = true; editingRes = id; render(); }
@@ -219,6 +448,7 @@
   document.addEventListener('submit', function (e) {
     e.preventDefault();
     var f = e.target, fd = new FormData(f);
+    if (f.id === 'authForm') { doAuthSubmit(fd); return; }
     if (f.id === 'resForm') {
       var data = { name: fd.get('name'), category: fd.get('category'), condition: fd.get('condition'), access: fd.get('access'), notes: fd.get('notes') };
       if (editingRes) { var r = state.resources.find(function (x) { return x.id === editingRes; }); Object.assign(r, data); }
@@ -245,5 +475,5 @@
     }
   });
 
-  render();
+  initAuth();
 })();
