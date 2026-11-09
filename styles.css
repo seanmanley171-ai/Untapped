@@ -1,0 +1,91 @@
+:root{
+  --bg:#070b16; --panel:#0e1526; --panel2:#121c33; --line:#22345c;
+  --text:#eef2ff; --dim:#9fb0d8; --cyan:#38e1ff; --violet:#9a6bff; --orange:#ff8a3c;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:
+    radial-gradient(600px 300px at 15% -5%, rgba(56,225,255,.16), transparent 60%),
+    radial-gradient(700px 340px at 90% 0%, rgba(154,107,255,.18), transparent 60%),
+    var(--bg);
+  color:var(--text);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  padding-bottom:86px;
+}
+main{max-width:720px;margin:0 auto;padding:18px 14px 10px}
+.top h1{
+  margin:4px 0 2px;font-size:34px;letter-spacing:3px;font-weight:800;
+  background:linear-gradient(90deg,var(--cyan),var(--violet));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.tag{margin:0;color:var(--text);font-weight:600}
+.sub{margin:2px 0 12px;color:var(--dim)}
+h2{margin:0 0 8px;font-size:19px}
+p{line-height:1.45}
+.dim{color:var(--dim);font-size:14px}
+.panel{
+  background:linear-gradient(180deg,var(--panel2),var(--panel));
+  border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0;
+}
+.glow{box-shadow:0 0 22px rgba(56,225,255,.12), inset 0 0 0 1px rgba(56,225,255,.08)}
+.bar{height:8px;background:#16223f;border-radius:99px;overflow:hidden;margin:10px 0}
+.fill{height:100%;background:linear-gradient(90deg,var(--cyan),var(--violet));border-radius:99px;transition:width .3s}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0}
+.bigcard{
+  text-align:left;background:linear-gradient(180deg,var(--panel2),var(--panel));
+  border:1px solid var(--line);border-radius:14px;padding:14px;color:var(--text);cursor:pointer;
+  display:flex;flex-direction:column;gap:4px;min-height:96px;
+}
+.bigcard:active{border-color:var(--cyan)}
+.ct{font-size:18px;font-weight:700}
+.cd{color:var(--dim);font-size:13px}
+.cc{margin-top:auto;color:var(--cyan);font-weight:700;font-size:14px}
+button{
+  background:#182540;color:var(--text);border:1px solid var(--line);
+  border-radius:10px;padding:9px 13px;font-size:15px;cursor:pointer;
+}
+button.primary{
+  background:linear-gradient(90deg,#ff7a26,var(--orange));border:none;color:#14100b;font-weight:800;
+  box-shadow:0 0 16px rgba(255,138,60,.35);
+}
+button.big{width:100%;padding:14px;font-size:17px;margin:6px 0 4px}
+.item{
+  display:flex;justify-content:space-between;align-items:center;gap:10px;
+  background:linear-gradient(180deg,var(--panel2),var(--panel));
+  border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0;
+}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.row.spread{justify-content:space-between}
+.form{
+  background:linear-gradient(180deg,var(--panel2),var(--panel));
+  border:1px solid var(--cyan);border-radius:14px;padding:14px;margin:12px 0;display:flex;flex-direction:column;gap:10px;
+}
+.form label{display:flex;flex-direction:column;gap:5px;font-size:14px;color:var(--dim)}
+.form input,.form select{
+  background:#0a1120;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:11px;font-size:16px;width:100%;
+}
+.score{
+  font-size:22px;font-weight:800;color:#0b0f1c;background:linear-gradient(90deg,var(--cyan),var(--violet));
+  border-radius:10px;padding:2px 10px;
+}
+.why{color:#b7ffd9;font-size:14px;margin:6px 0}
+.miss{color:#ffd28a;font-size:14px}
+.flag{color:#ff9d9d;font-size:14px;margin-top:4px}
+.step{display:flex;gap:9px;align-items:flex-start;padding:7px 0;font-size:15px}
+.step input{width:20px;height:20px;margin-top:1px;accent-color:var(--cyan)}
+.addstep input{flex:1;background:#0a1120;color:var(--text);border:1px solid var(--line);border-radius:9px;padding:10px;font-size:15px}
+.stat .num{font-size:30px;font-weight:800}
+ul.plain{margin:6px 0;padding-left:18px}
+details{margin:8px 0}
+summary{cursor:pointer;color:var(--cyan);font-weight:600}
+nav#nav{
+  position:fixed;left:0;right:0;bottom:0;display:flex;gap:2px;justify-content:space-around;
+  background:rgba(9,13,24,.96);border-top:1px solid var(--line);padding:8px 4px calc(8px + env(safe-area-inset-bottom));z-index:10;
+}
+.navbtn{background:none;border:none;color:var(--dim);font-size:12.5px;padding:8px 4px;border-radius:9px;position:relative}
+.navbtn.on{color:var(--cyan);font-weight:700}
+.badge{
+  background:var(--violet);color:#fff;border-radius:99px;font-size:11px;padding:1px 6px;margin-left:4px;font-weight:700;
+}
+@media (max-width:380px){ .grid{grid-template-columns:1fr 1fr} .ct{font-size:16px} }

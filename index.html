@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>UNTAPPED — Discover what's possible</title>
+<meta name="description" content="UNTAPPED helps you find value in what you already have: your things, your skills, your time. Discover what you could do, and turn it into a real project.">
+<meta name="theme-color" content="#070b16">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<main id="app"></main>
+<nav id="nav"></nav>
+<script src="logic.js"></script>
+<script src="ideas.js"></script>
+<script src="app.js"></script>
+<script>
+if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js').catch(function () {}); }
+</script>
+</body>
+</html>
