@@ -133,6 +133,99 @@
       })
       .catch(function (e) { adminMsg = 'Save failed: ' + ((e && e.message) || 'unknown error'); render(); });
   }
+  // ---------- Google Play billing (Digital Goods API, TWA) ----------
+  var PRODUCT_ID = 'untapped_monthly';
+  function savePurchaseToken(token) {
+    if (!sb || !currentUser || !token) return Promise.resolve(false);
+    return sb.from('profiles').update({ play_purchase_token: token }).eq('id', currentUser.id)
+      .then(function (res) { return !res.error; })
+      .catch(function () { return false; });
+  }
+  function tryVerifyPurchase() {
+    // The server confirms the saved purchase token with Google Play and
+    // opens access. Until that function is deployed this returns
+    // 'unavailable' and the app says so honestly — the token stays saved.
+    if (!sb || !sb.functions) return Promise.resolve('unavailable');
+    return sb.functions.invoke('verify-purchase', { body: {} })
+      .then(function (res) {
+        if (res.error) return 'unavailable';
+        return (res.data && res.data.status) || 'checked';
+      })
+      .catch(function () { return 'unavailable'; });
+  }
+  function finishPurchase(token) {
+    if (!token) { subMsg = 'Google Play did not return a purchase token. If you were charged, tap Restore purchase.'; render(); return; }
+    subMsg = 'Google Play confirmed your purchase. Saving it to your account…'; render();
+    savePurchaseToken(token).then(function () {
+      return tryVerifyPurchase();
+    }).then(function (status) {
+      if (status === 'unavailable') {
+        subMsg = 'Your purchase is confirmed by Google Play and your purchase token is saved on your account. The last piece — server confirmation — is being switched on now; when it runs, Recheck opens your access. You do not need to pay again.';
+        render();
+        return;
+      }
+      return loadProfile(currentUser.id).then(function (p) {
+        currentProfile = p;
+        if (hasAccess(p)) { subMsg = ''; gate = 'app'; }
+        else subMsg = 'Server check finished (' + status + ') but access is not open yet. Tap Recheck my account in a moment.';
+        render();
+      });
+    }).catch(function () {
+      subMsg = 'Your purchase went through at Google Play. Tap Restore purchase to finish setting it up here.';
+      render();
+    });
+  }
+  function playService() {
+    if (!('getDigitalGoodsService' in window)) return null;
+    return window.getDigitalGoodsService('https://play.google.com/billing');
+  }
+  function doSubscribe() {
+    if (!sb || !currentUser) { subMsg = 'Sign in first, then subscribe.'; render(); return; }
+    var svcPromise;
+    try { svcPromise = playService(); } catch (e) { svcPromise = null; }
+    if (!svcPromise) {
+      subMsg = 'Subscriptions run inside the UNTAPPED Android app, where Google Play handles payment. Open the app to subscribe — nothing was charged.';
+      render(); return;
+    }
+    subMsg = 'Opening Google Play…'; render();
+    var cancelled = false;
+    svcPromise.then(function (svc) {
+      return svc.getDetails([PRODUCT_ID]);
+    }).then(function (details) {
+      if (!details || !details.length) {
+        subMsg = 'The subscription is not switched on at Google Play yet. Nothing was charged.';
+        render(); cancelled = true; return null;
+      }
+      var req = new PaymentRequest(
+        [{ supportedMethods: 'https://play.google.com/billing', data: { sku: PRODUCT_ID } }],
+        { total: { label: 'UNTAPPED Premium', amount: { currency: 'USD', value: '0' } } }
+      );
+      return req.show();
+    }).then(function (resp) {
+      if (cancelled || !resp) return;
+      var token = resp.details && (resp.details.purchaseToken || resp.details.token);
+      return resp.complete('success').then(function () { finishPurchase(token); });
+    }).catch(function () {
+      if (!cancelled) { subMsg = 'Checkout was closed before it finished. Nothing was charged.'; render(); }
+    });
+  }
+  function doRestore() {
+    if (!sb || !currentUser) { subMsg = 'Sign in first, then restore.'; render(); return; }
+    var svcPromise;
+    try { svcPromise = playService(); } catch (e) { svcPromise = null; }
+    if (!svcPromise) {
+      subMsg = 'Restore runs inside the UNTAPPED Android app. Open the app and tap Restore there.';
+      render(); return;
+    }
+    subMsg = 'Checking Google Play for your purchase…'; render();
+    svcPromise.then(function (svc) { return svc.listPurchases(); })
+      .then(function (list) {
+        var mine = (list || []).filter(function (x) { return x.itemId === PRODUCT_ID; });
+        if (!mine.length) { subMsg = 'No UNTAPPED subscription found on this Google account yet.'; render(); return; }
+        finishPurchase(mine[0].purchaseToken);
+      })
+      .catch(function () { subMsg = 'Could not check Google Play just now. Try again in a moment.'; render(); });
+  }
   function hasAccess(p) {
     if (!p) return false;
     if (p.is_admin) return true;
@@ -345,14 +438,14 @@
   function subscribeHTML() {
     var email = currentUser ? (currentUser.email || '') : '';
     return header('Subscription required') +
-      '<div class="panel glow"><h2>UNTAPPED — $4.99/month</h2>' +
-      '<p>One monthly subscription opens the whole app: your resources, skills, matching ideas, projects and growth — saved to your account.</p>' +
+      '<div class="panel glow"><h2>UNTAPPED Premium — $4.99/month</h2>' +
+      '<p><strong>Start with a 3-day free trial</strong>, then $4.99/month. One subscription opens the whole app: your resources, skills, matching ideas, projects and growth — saved to your account.</p>' +
       '<p class="dim">Signed in as ' + esc(email) + '</p>' +
       '<p class="dim">Account check: ' + (currentProfile ? ('admin = ' + (currentProfile.is_admin ? 'yes' : 'no') + ' · status = ' + esc(currentProfile.sub_status || 'none')) : 'no profile row loaded') + '</p>' +
       (subMsg ? '<div class="msg">' + esc(subMsg) + '</div>' : '') +
-      '<button class="primary big" data-act="subscribePlaceholder">Subscribe — $4.99/month</button>' +
+      '<button class="primary big" data-act="subscribe">Start 3-day free trial — then $4.99/month</button>' +
       '<div class="row"><button data-act="recheck">Recheck my account</button>' +
-      '<button data-act="restorePlaceholder">Restore purchase</button>' +
+      '<button data-act="restore">Restore purchase</button>' +
       '<button data-act="signOut">Sign out</button></div></div>' +
       '<div class="panel"><p class="dim">Payments are handled by Google Play. You can cancel anytime in Google Play.</p></div>';
   }
@@ -556,8 +649,8 @@
       else { btn.dataset.arm = '1'; btn.textContent = 'Tap again to remove access'; }
       return;
     }
-    if (act === 'subscribePlaceholder') { subMsg = 'Checkout opens when billing is switched on. Nothing was charged.'; render(); return; }
-    if (act === 'restorePlaceholder') { subMsg = 'Restore opens when billing is switched on. Nothing was charged.'; render(); return; }
+    if (act === 'subscribe') { doSubscribe(); return; }
+    if (act === 'restore') { doRestore(); return; }
     if (act === 'addRes') { window.__showResForm = true; editingRes = null; render(); }
     if (act === 'cancelRes') { window.__showResForm = false; editingRes = null; render(); }
     if (act === 'editRes') { window.__showResForm = true; editingRes = id; render(); }
