@@ -17,6 +17,8 @@
     }
   } catch (e) { sb = null; }
   var currentUser = null, currentProfile = null;
+  var SUPPORT_EMAIL = 'seanmanley171@gmail.com';
+  var settingsMsg = '', adminUsers = null, adminMsg = '', adminLoading = false;
   var gate = 'loading'; // loading | auth | subscribe | app
   var authMode = 'signin'; // signin | signup
   var authMsg = '', authError = '', subMsg = '';
@@ -94,9 +96,47 @@
       })
       .catch(function (e) { console.warn('UNTAPPED profile load failed:', e); return null; });
   }
+  function loadAdminUsers() {
+    if (!sb || adminLoading) return;
+    adminLoading = true;
+    sb.from('profiles').select('id, email, is_admin, sub_status, sub_current_period_end, created_at')
+      .order('created_at', { ascending: true })
+      .then(function (res) {
+        adminLoading = false;
+        if (res.error) { adminMsg = 'Could not load accounts: ' + res.error.message; adminUsers = []; }
+        else adminUsers = res.data || [];
+        if (view === 'settings' && gate === 'app') render();
+      })
+      .catch(function (e) {
+        adminLoading = false; adminUsers = [];
+        adminMsg = 'Could not load accounts: ' + ((e && e.message) || 'unknown error');
+        if (view === 'settings' && gate === 'app') render();
+      });
+  }
+  function adminSetStatus(userId, status) {
+    if (!sb) return;
+    if (userId === (currentUser && currentUser.id)) { adminMsg = 'That is your own account — the panel leaves yours alone on purpose.'; render(); return; }
+    var patch = { sub_status: status };
+    if (status === 'active') {
+      var end = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+      patch.sub_current_period_end = end.toISOString();
+    }
+    if (status === 'none') patch.sub_current_period_end = null;
+    adminMsg = 'Saving…'; render();
+    sb.from('profiles').update(patch).eq('id', userId)
+      .then(function (res) {
+        if (res.error) { adminMsg = 'Save failed: ' + res.error.message; render(); return; }
+        adminMsg = 'Saved. The list below is fresh from the server.';
+        adminUsers = null; // force reload so the panel shows the server's truth
+        render();
+        loadAdminUsers();
+      })
+      .catch(function (e) { adminMsg = 'Save failed: ' + ((e && e.message) || 'unknown error'); render(); });
+  }
   function hasAccess(p) {
     if (!p) return false;
     if (p.is_admin) return true;
+    if (p.sub_status === 'comped') return true; // free access granted by the admin
     if (p.sub_status === 'active' && p.sub_current_period_end) {
       return new Date(p.sub_current_period_end).getTime() > Date.now();
     }
@@ -125,7 +165,7 @@
   function doSignOut() {
     if (cloudTimer) { clearTimeout(cloudTimer); cloudTimer = null; }
     currentUser = null; currentProfile = null; cloudReady = false; loadingUserId = null;
-    authMsg = ''; authError = ''; subMsg = '';
+    authMsg = ''; authError = ''; subMsg = ''; settingsMsg = ''; adminUsers = null; adminMsg = ''; adminLoading = false;
     gate = 'auth';
     if (sb) sb.auth.signOut().catch(function () {});
     render();
@@ -208,7 +248,7 @@
   function renderNav() {
     var items = [
       ['home', 'Home'], ['resources', 'Resources'], ['abilities', 'Skills'],
-      ['discover', 'Discover'], ['projects', 'Projects'], ['growth', 'Growth']
+      ['discover', 'Discover'], ['projects', 'Projects'], ['growth', 'Growth'], ['settings', 'Settings']
     ];
     var counts = { resources: state.resources.length, abilities: state.abilities.length, projects: state.projects.length };
     nav.innerHTML = items.map(function (it) {
@@ -225,9 +265,66 @@
   // ---------- gate screens (loading / auth / subscribe) ----------
   function accountHTML() {
     if (!currentUser) return '';
+    var adminLine = (currentProfile && currentProfile.is_admin)
+      ? '<p><span class="pill gold">★ ADMIN ACCOUNT</span></p><p class="dim">This is the admin account. It never pays and never hits the subscription gate. Manage accounts in Settings.</p>' : '';
     return '<div class="panel account"><h2>Account</h2>' +
-      '<p class="dim">Signed in as ' + esc(currentUser.email || '') + '</p>' +
-      '<div class="row"><button data-act="signOut">Sign out</button></div></div>';
+      '<p class="dim">Signed in as ' + esc(currentUser.email || '') + '</p>' + adminLine +
+      '<div class="row"><button data-nav="settings">Settings & support</button><button data-act="signOut">Sign out</button></div></div>';
+  }
+
+  function settingsHTML() {
+    var p = currentProfile;
+    var statusLine = !p ? 'No profile loaded yet — tap Recheck.' :
+      (p.is_admin ? 'Admin — full access, no subscription needed.' :
+        (p.sub_status === 'comped' ? 'Free access granted by the admin (comped).' :
+          (p.sub_status === 'active' ? 'Subscription active' + (p.sub_current_period_end ? ' until ' + esc(String(p.sub_current_period_end).slice(0, 10)) : '') + '.' :
+            'Status: ' + esc(p.sub_status || 'none') + ' — no active subscription.')));
+    var out = header('Settings') +
+      '<div class="panel account"><h2>Account</h2>' +
+      '<p class="dim">Signed in as ' + esc(currentUser ? (currentUser.email || '') : '') + '</p>' +
+      (p && p.is_admin ? '<p><span class="pill gold">★ ADMIN ACCOUNT</span></p>' : '') +
+      '<p>' + esc(statusLine) + '</p>' +
+      '<p class="dim">Account check: ' + (p ? ('admin = ' + (p.is_admin ? 'yes' : 'no') + ' · status = ' + esc(p.sub_status || 'none')) : 'no profile row loaded') + '</p>' +
+      (settingsMsg ? '<div class="msg">' + esc(settingsMsg) + '</div>' : '') +
+      '<div class="row"><button data-act="recheck2">Recheck my account</button>' +
+      '<button data-act="changePw">Change password</button>' +
+      '<button data-act="signOut">Sign out</button></div></div>' +
+      '<div class="panel"><h2>Support</h2>' +
+      '<p>Stuck, charged wrong, or something looks broken? Email support and a real person reads it.</p>' +
+      '<p><a class="btnlink primary" href="mailto:' + SUPPORT_EMAIL + '?subject=' + encodeURIComponent('UNTAPPED support') + '">Email support — ' + esc(SUPPORT_EMAIL) + '</a></p>' +
+      '<p class="dim">To delete your account and its data, email support from your account email and ask for account deletion.</p>' +
+      '<p class="dim"><a href="privacy.html">Privacy policy</a></p></div>';
+    if (p && p.is_admin) out += adminHTML();
+    return out;
+  }
+
+  function adminHTML() {
+    var rows;
+    if (adminUsers === null) {
+      rows = '<p class="dim">' + (adminLoading ? 'Loading accounts…' : 'Loading accounts…') + '</p>';
+    } else if (!adminUsers.length) {
+      rows = '<p class="dim">No accounts found.</p>';
+    } else {
+      rows = adminUsers.map(function (u) {
+        var mine = currentUser && u.id === currentUser.id;
+        var pills = (u.is_admin ? '<span class="pill gold">ADMIN</span> ' : '') +
+          '<span class="pill">' + esc(u.sub_status || 'none') + '</span>' +
+          (u.sub_current_period_end && u.sub_status === 'active' ? ' <span class="dim">until ' + esc(String(u.sub_current_period_end).slice(0, 10)) + '</span>' : '');
+        var when = u.created_at ? esc(String(u.created_at).slice(0, 10)) : '';
+        var actions = mine ? '<span class="dim">This is you</span>' :
+          '<div class="row">' +
+          '<button data-act="adminComp" data-id="' + u.id + '">Give free access</button>' +
+          '<button data-act="adminActive" data-id="' + u.id + '">Set active (30 days)</button>' +
+          '<button data-act="adminNone" data-id="' + u.id + '">Remove access</button></div>';
+        return '<div class="item adminuser"><div><strong>' + esc(u.email || '(no email)') + '</strong>' +
+          '<div class="dim">Joined ' + when + '</div><div>' + pills + '</div></div>' + actions + '</div>';
+      }).join('');
+    }
+    return '<div class="panel glow"><h2>Admin — all accounts</h2>' +
+      '<p class="dim">Only you see this. Free access (comped) opens the app with no payment — use it to fix an account or comp a friend.</p>' +
+      (adminMsg ? '<div class="msg">' + esc(adminMsg) + '</div>' : '') +
+      rows +
+      '<div class="row"><button data-act="adminRefresh">Refresh list</button></div></div>';
   }
 
   function authHTML() {
@@ -393,8 +490,11 @@
     nav.style.display = '';
     renderNav();
     app.innerHTML = view === 'home' ? homeHTML() : view === 'resources' ? resourcesHTML() : view === 'abilities' ? abilitiesHTML() :
-      view === 'discover' ? discoverHTML() : view === 'projects' ? projectsHTML() : growthHTML();
+      view === 'discover' ? discoverHTML() : view === 'projects' ? projectsHTML() : view === 'settings' ? settingsHTML() : growthHTML();
     window.scrollTo(0, 0);
+    if (view === 'settings' && currentProfile && currentProfile.is_admin && adminUsers === null && !adminLoading) {
+      loadAdminUsers();
+    }
   }
 
   function render() {
@@ -424,6 +524,36 @@
         else subMsg = 'Checked just now: ' + (p ? ('admin = ' + (p.is_admin ? 'yes' : 'no') + ', status = ' + (p.sub_status || 'none')) : 'no profile row found for this account') + '.';
         render();
       });
+      return;
+    }
+    if (act === 'recheck2') {
+      if (!sb || !currentUser) { settingsMsg = 'Sign in first, then recheck.'; render(); return; }
+      settingsMsg = 'Checking your account on the server…'; render();
+      loadProfile(currentUser.id).then(function (p) {
+        currentProfile = p;
+        settingsMsg = 'Checked just now: ' + (p ? ('admin = ' + (p.is_admin ? 'yes' : 'no') + ', status = ' + (p.sub_status || 'none') + '.') : 'no profile row found for this account.');
+        if (p && p.is_admin) adminUsers = null; // admin panel appears — load it fresh
+        render();
+      });
+      return;
+    }
+    if (act === 'changePw') {
+      if (!sb || !currentUser) { settingsMsg = 'Sign in first.'; render(); return; }
+      settingsMsg = 'Sending a password reset email…'; render();
+      sb.auth.resetPasswordForEmail(currentUser.email, { redirectTo: window.location.origin + window.location.pathname })
+        .then(function (res) {
+          settingsMsg = res.error ? ('Could not send it: ' + res.error.message) : 'Password reset email sent to ' + (currentUser.email || '') + '. Follow the link in it, then sign in with the new password.';
+          render();
+        })
+        .catch(function (e) { settingsMsg = 'Could not send it: ' + ((e && e.message) || 'unknown error'); render(); });
+      return;
+    }
+    if (act === 'adminRefresh') { adminUsers = null; adminMsg = ''; render(); loadAdminUsers(); return; }
+    if (act === 'adminComp') { adminSetStatus(id, 'comped'); return; }
+    if (act === 'adminActive') { adminSetStatus(id, 'active'); return; }
+    if (act === 'adminNone') {
+      if (btn.dataset.arm) { adminSetStatus(id, 'none'); }
+      else { btn.dataset.arm = '1'; btn.textContent = 'Tap again to remove access'; }
       return;
     }
     if (act === 'subscribePlaceholder') { subMsg = 'Checkout opens when billing is switched on. Nothing was charged.'; render(); return; }

@@ -92,4 +92,19 @@ nav#nav{
 .badge{
   background:var(--violet);color:#fff;border-radius:99px;font-size:11px;padding:1px 6px;margin-left:4px;font-weight:700;
 }
+.pill{
+  display:inline-block;background:#182540;border:1px solid var(--line);color:var(--text);
+  border-radius:99px;font-size:12px;font-weight:700;padding:2px 9px;letter-spacing:.4px;
+}
+.pill.gold{background:linear-gradient(90deg,#8a5a12,#c98f1d);border-color:#e8b64c;color:#fff8e6}
+a{color:var(--cyan)}
+a.btnlink{
+  display:inline-block;background:#182540;color:var(--text);border:1px solid var(--line);
+  border-radius:10px;padding:10px 14px;font-size:15px;text-decoration:none;font-weight:600;
+}
+a.btnlink.primary{
+  background:linear-gradient(90deg,#ff7a26,var(--orange));border:none;color:#14100b;font-weight:800;
+}
+.adminuser{flex-direction:column;align-items:stretch}
+.adminuser .row{margin-top:8px}
 @media (max-width:380px){ .grid{grid-template-columns:1fr 1fr} .ct{font-size:16px} }
