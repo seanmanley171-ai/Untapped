@@ -251,9 +251,11 @@
       '<div class="panel glow"><h2>UNTAPPED — $4.99/month</h2>' +
       '<p>One monthly subscription opens the whole app: your resources, skills, matching ideas, projects and growth — saved to your account.</p>' +
       '<p class="dim">Signed in as ' + esc(email) + '</p>' +
+      '<p class="dim">Account check: ' + (currentProfile ? ('admin = ' + (currentProfile.is_admin ? 'yes' : 'no') + ' · status = ' + esc(currentProfile.sub_status || 'none')) : 'no profile row loaded') + '</p>' +
       (subMsg ? '<div class="msg">' + esc(subMsg) + '</div>' : '') +
       '<button class="primary big" data-act="subscribePlaceholder">Subscribe — $4.99/month</button>' +
-      '<div class="row"><button data-act="restorePlaceholder">Restore purchase</button>' +
+      '<div class="row"><button data-act="recheck">Recheck my account</button>' +
+      '<button data-act="restorePlaceholder">Restore purchase</button>' +
       '<button data-act="signOut">Sign out</button></div></div>' +
       '<div class="panel"><p class="dim">Payments are handled by Google Play. You can cancel anytime in Google Play.</p></div>';
   }
@@ -413,6 +415,17 @@
     if (act === 'signOut') { doSignOut(); return; }
     if (act === 'authToggle') { authMode = authMode === 'signin' ? 'signup' : 'signin'; authError = ''; authMsg = ''; render(); return; }
     if (act === 'forgot') { var em = document.getElementById('authEmail'); doForgot(em ? em.value.trim() : ''); return; }
+    if (act === 'recheck') {
+      if (!sb || !currentUser) { subMsg = 'Sign in first, then recheck.'; render(); return; }
+      subMsg = 'Checking your account…'; render();
+      loadProfile(currentUser.id).then(function (p) {
+        currentProfile = p;
+        if (hasAccess(p)) { subMsg = ''; gate = 'app'; }
+        else subMsg = 'Checked just now: ' + (p ? ('admin = ' + (p.is_admin ? 'yes' : 'no') + ', status = ' + (p.sub_status || 'none')) : 'no profile row found for this account') + '.';
+        render();
+      });
+      return;
+    }
     if (act === 'subscribePlaceholder') { subMsg = 'Checkout opens when billing is switched on. Nothing was charged.'; render(); return; }
     if (act === 'restorePlaceholder') { subMsg = 'Restore opens when billing is switched on. Nothing was charged.'; render(); return; }
     if (act === 'addRes') { window.__showResForm = true; editingRes = null; render(); }
